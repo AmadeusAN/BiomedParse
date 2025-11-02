@@ -1,3 +1,3 @@
-_target_: src.evaluators.biomedparse_evaluator_3D.BiomedParseEvaluator
+_target_: nets_.BiomedParse.src.evaluators.biomedparse_evaluator_3D.BiomedParseEvaluator
 predictions_fmt: null
 predictions_batch_fmt: null

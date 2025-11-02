@@ -7,7 +7,8 @@ import hydra
 from hydra import compose
 from hydra.core.global_hydra import GlobalHydra
 import gc
-from utils import process_input, process_output, slice_nms
+from .utils import process_input, process_output, slice_nms
+
 
 def load_case(file_path):
     data = np.load(file_path, allow_pickle=True)
@@ -34,8 +35,12 @@ def merge_multiclass_masks(masks, ids):
 def postprocess(model_outputs, object_existence, threshold=0.5, do_nms=True):
     if do_nms and model_outputs.shape[0] > 1:
         # do non-max suppression for each slice
-        return slice_nms(model_outputs.sigmoid(), object_existence.sigmoid(), 
-                                        iou_threshold=0.5, score_threshold=threshold)
+        return slice_nms(
+            model_outputs.sigmoid(),
+            object_existence.sigmoid(),
+            iou_threshold=0.5,
+            score_threshold=threshold,
+        )
     mask = (model_outputs.sigmoid()) * (
         object_existence.sigmoid() > threshold
     ).int().unsqueeze(-1).unsqueeze(-1)
@@ -87,7 +92,7 @@ def main(args):
         ids = [int(_) for _ in text_prompts.keys() if _ != "instance_label"]
         ids.sort()
         text = "[SEP]".join([text_prompts[str(i)] for i in ids])
-        
+
         imgs, pad_width, padded_size, valid_axis = process_input(imgs, 512)
 
         imgs = imgs.to(device).int()

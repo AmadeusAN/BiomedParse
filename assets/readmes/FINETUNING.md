@@ -101,6 +101,17 @@ python -m azureml.acft.image.components.olympus.app.main \
   --config-name finetune_biomedparse
 ```
 
+```bash
+python -m azureml.acft.image.components.olympus.app.main \
+  --config-path /public/cjh/workspace/LAA_SEG/nets_/BiomedParse/configs \
+  --config-name finetune_biomedparse
+```
+
+```bash
+python -m azureml.acft.image.components.olympus.app.main \
+  --config-name finetune_biomedparse
+```
+
 This will:
 1. Load all YAML config components via Hydra.  
 2. Initialize the Olympus training pipeline.  

@@ -2,6 +2,6 @@ _target_: azureml.acft.image.components.olympus.core.ModuleDatasets
 test:
   # _target_: torch.utils.data.ConcatDataset
   # datasets:
-  - _target_: src.datasets.biomedparse_dataset_3D.BiomedParseDataset3D 
+  - _target_: nets_.BiomedParse.src.datasets.biomedparse_dataset_3D.BiomedParseDataset3D 
     _partial_: True
     root_dir: ${mounts.external}/data/test

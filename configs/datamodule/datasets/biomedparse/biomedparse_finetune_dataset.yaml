@@ -3,9 +3,9 @@ train:
   _target_: torch.utils.data.ConcatDataset
   _partial_: True
   datasets:
-    - _target_: src.datasets.biomedparse_dataset.BiomedParseDataset
+    - _target_: nets_.BiomedParse.src.datasets.biomedparse_dataset.BiomedParseDataset
       root_dir: ${mounts.external}/data/DATASET1/processed
-    - _target_: src.datasets.biomedparse_dataset.BiomedParseDataset
-      root_dir: ${mounts.external}/data/DATASET2/processed
-    - _target_: src.datasets.biomedparse_dataset.BiomedParseDataset
-      root_dir: ${mounts.external}/data/DATASET3/processed
+    # - _target_: src.datasets.biomedparse_dataset.BiomedParseDataset
+    #   root_dir: ${mounts.external}/data/DATASET2/processed
+    # - _target_: src.datasets.biomedparse_dataset.BiomedParseDataset
+    #   root_dir: ${mounts.external}/data/DATASET3/processed
