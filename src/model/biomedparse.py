@@ -7,6 +7,7 @@ import os
 import numpy as np
 import time
 
+
 def process_multi_prompts(text):
     """
     Process the input text to handle multiple prompts.
@@ -16,24 +17,26 @@ def process_multi_prompts(text):
         return None, False, None
     # ensure we have a list of strings
     text = text if isinstance(text, (list, tuple)) else [text]
-    text = [_text.split("[SEP]")for _text in text]    # split text by [SEP]
+    text = [_text.split("[SEP]") for _text in text]  # split text by [SEP]
     num_prompts = torch.tensor([len(_text) for _text in text], dtype=torch.int64)
     # flatten multiple text prompts to the batch dimension
     # intial format: [(text1 for img1, text2 for img1), (text1 for img2)]
     text = [t for i in range(len(text)) for t in text[i]]
     # new format: [text1 for img1, text2 for img1, text1 for img2]
     return text, num_prompts
-        
-        
+
+
 def tile_feature(feat: torch.Tensor, P: int) -> torch.Tensor:
     # feat: [B, C, H, W], P = num_prompts
     B, C, H, W = feat.shape
     # 1) insert prompt dim
-    v = feat.view(B, 1, C, H, W)           # [B, 1, C, H, W]
+    v = feat.view(B, 1, C, H, W)  # [B, 1, C, H, W]
     # 2) virtually expand along prompt dim
-    e = v.expand(-1, P, -1, -1, -1)        # [B, P, C, H, W]
+    e = v.expand(-1, P, -1, -1, -1)  # [B, P, C, H, W]
     # 3) collapse back to batch
-    return e.reshape(B * P, C, H, W)       # [B*P, C, H, W]
+    return e.reshape(B * P, C, H, W)  # [B*P, C, H, W]
+
+
 class MaskFormerHead(nn.Module):
     def __init__(self, pixel_decoder, predictor):
         super().__init__()
@@ -59,14 +62,22 @@ class MaskFormerHead(nn.Module):
             "background",
         ]
 
-    def forward(self, image_features, text=None, image=None, classes=None, mask=None):
+    def forward(
+        self,
+        image_features,
+        text=None,
+        num_prompts=None,
+        image=None,
+        classes=None,
+        mask=None,
+    ):
         if hasattr(self.predictor, "language_encoder"):
             self.predictor.language_encoder.get_text_embeddings(
                 self.classes, is_eval=False
             )
         t0 = time.time()
-        mask_features, _, multi_scale_features = (
-            self.pixel_decoder.forward_features(image_features)
+        mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(
+            image_features
         )
         t1 = time.time()
         # print("pixel decoder time: ", t1 - t0)
@@ -79,7 +90,7 @@ class MaskFormerHead(nn.Module):
             logit_scale = self.predictor.language_encoder.logit_scale
             if text is not None:
                 text, num_prompts = process_multi_prompts(text)
-                
+
                 gtext = self.predictor.language_encoder.get_text_token_embeddings(
                     text, name="grounding", token=False, norm=False
                 )
@@ -99,14 +110,16 @@ class MaskFormerHead(nn.Module):
                 non_zero_query_mask = query_emb.sum(dim=-1) == -query_emb.shape[-1]
                 query_emb[non_zero_query_mask] = 0
 
-                extra["grounding_tokens"] = query_emb    # [seq_len, batch_size, dim]
-                extra["grounding_nonzero_mask"] = non_zero_query_mask.t()    # [batch_size, seq_len]
-                
+                extra["grounding_tokens"] = query_emb  # [seq_len, batch_size, dim]
+                extra["grounding_nonzero_mask"] = (
+                    non_zero_query_mask.t()
+                )  # [batch_size, seq_len]
+
                 t2 = time.time()
                 # print("language encoder time: ", t2 - t1)
-        
+
         # repeat image features for each text prompt
-        P = int(num_prompts[0])    # assume same number of prompts for all images
+        P = int(num_prompts[0])  # assume same number of prompts for all images
         if any([_num != P for _num in num_prompts]):
             # warning: different number of prompts for different images
             print(
@@ -123,20 +136,27 @@ class MaskFormerHead(nn.Module):
         t4 = time.time()
         # print("boltzformer time: ", t4 - t2)
 
-        predictions["class_emb"] = class_emb    # [batch_size, dim]
+        predictions["class_emb"] = class_emb  # [batch_size, dim]
         predictions["logit_scale"] = logit_scale
 
         return predictions
 
     def forward_eval(
-        self, image_features, text=None, image=None, classes=None, mask=None, mask_file=None
+        self,
+        image_features,
+        text=None,
+        num_prompts=None,
+        image=None,
+        classes=None,
+        mask=None,
+        mask_file=None,
     ):
         if hasattr(self.predictor, "language_encoder"):
             self.predictor.language_encoder.get_text_embeddings(
                 self.classes, is_eval=True
             )
-        mask_features, _, multi_scale_features = (
-            self.pixel_decoder.forward_features(image_features)
+        mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(
+            image_features
         )
 
         extra = {}
@@ -172,7 +192,7 @@ class MaskFormerHead(nn.Module):
                 extra["grounding_nonzero_mask"] = non_zero_query_mask.t()
 
         num_prompts = num_prompts.to(mask_features.device)
-        
+
         if num_prompts.max() > num_prompts.min():
             # repeat interleave image features for each text prompt
             mask_features = mask_features.repeat_interleave(num_prompts, dim=0)
@@ -181,12 +201,12 @@ class MaskFormerHead(nn.Module):
                 for _feature in multi_scale_features
             ]
         else:
-            P = int(num_prompts[0])    # assume same number of prompts for all images
+            P = int(num_prompts[0])  # assume same number of prompts for all images
             mask_features = tile_feature(mask_features, P)
             multi_scale_features = [
                 tile_feature(_feature, P) for _feature in multi_scale_features
             ]
-        
+
         predictions = self.predictor(
             x=multi_scale_features, mask_features=mask_features, mask=mask, extra=extra
         )
@@ -209,7 +229,7 @@ class BiomedParseModel(nn.Module):
         gray_scale=True,
         convolute_outputs=True,  # for upscaling the output of the model
         out_channels_1=10,  # Parameter for upscaling
-        edge_queries=0,    # Number of queries used for edge detection
+        edge_queries=0,  # Number of queries used for edge detection
     ):
         super().__init__()
         self.backbone = backbone
@@ -223,11 +243,11 @@ class BiomedParseModel(nn.Module):
             std = float(np.mean(pixel_std))
             pixel_mean = [mean for _ in range(3)]
             pixel_std = [std for _ in range(3)]
-        self.register_buffer("pixel_mean", torch.tensor(pixel_mean).view(1,3,1,1))
-        self.register_buffer("pixel_std",  torch.tensor(pixel_std).view(1,3,1,1))
-        
+        self.register_buffer("pixel_mean", torch.tensor(pixel_mean).view(1, 3, 1, 1))
+        self.register_buffer("pixel_std", torch.tensor(pixel_std).view(1, 3, 1, 1))
+
         self.edge_queries = edge_queries
-        
+
         self.convolute_outputs = convolute_outputs
         if self.convolute_outputs:
             self.output_deconv = nn.ConvTranspose2d(
@@ -237,12 +257,12 @@ class BiomedParseModel(nn.Module):
                 stride=2,
                 padding=1,
             )
-            self.layer_norm = nn.GroupNorm(
-                num_groups=1, num_channels=out_channels_1
-            )
+            self.layer_norm = nn.GroupNorm(num_groups=1, num_channels=out_channels_1)
             # output convolution that doesn't change dimension but just channels
             self.output_conv = nn.Conv2d(
-                in_channels=out_channels_1 + 3, out_channels=out_channels_1, kernel_size=1
+                in_channels=out_channels_1 + 3,
+                out_channels=out_channels_1,
+                kernel_size=1,
             )
             self.output_conv2 = nn.Conv2d(
                 in_channels=out_channels_1, out_channels=1, kernel_size=1
@@ -255,17 +275,23 @@ class BiomedParseModel(nn.Module):
         """
         size = image.shape[-2:]  # bs, 3, h, w
         image_res2 = F.interpolate(
-            image, size=(size[0]//4, size[1]//4), mode="bilinear", align_corners=False
+            image,
+            size=(size[0] // 4, size[1] // 4),
+            mode="bilinear",
+            align_corners=False,
         )  # bs, 3, 128, 128 (stride=4)
         image_res1 = F.interpolate(
-            image, size=(size[0]//2, size[1]//2), mode="bilinear", align_corners=False
+            image,
+            size=(size[0] // 2, size[1] // 2),
+            mode="bilinear",
+            align_corners=False,
         )  # bs, 3, 256, 256 (stride=2)
 
         mean_mask = pred_gmasks.mean(dim=1, keepdim=True)  # bs, 1, 256, 256 (stride=4)
         # bs, num_queries, 128, 128
         pred_gmasks_res1 = F.interpolate(
             mean_mask,
-            size=(size[0]//2, size[1]//2),
+            size=(size[0] // 2, size[1] // 2),
             mode="bilinear",
             align_corners=False,
         )  # bs, 1, 256, 256
@@ -303,27 +329,37 @@ class BiomedParseModel(nn.Module):
         image_embedding = self.backbone(image)
         t1 = time.time()
         # print("backbone time: ", t1 - t0)
-        
-        outputs = self.sem_seg_head.forward(
-            image_features=image_embedding, text=text
-        )
-        t2 = time.time()
-        # print("sem_seg_head time: ", t2 - t1)
-        
+
         _, num_prompts = process_multi_prompts(text)
         num_prompts = num_prompts.to(image.device)
+
+        outputs = self.sem_seg_head.forward(
+            image_features=image_embedding, text=text, num_prompts=num_prompts
+        )
+
         outputs["num_prompts"] = num_prompts
-        
+
+        t2 = time.time()
+        # print("sem_seg_head time: ", t2 - t1)
+
+        # _, num_prompts = process_multi_prompts(text)
+        # num_prompts = num_prompts.to(image.device)
+        # outputs["num_prompts"] = num_prompts
+
         if self.edge_queries > 0:
             # use some of the masks for edge detection
-            outputs["edge_masks"] = outputs["pred_gmasks"][:, -self.edge_queries:].mean(dim=1, keepdim=True)
-            outputs["pred_gmasks"] = outputs["pred_gmasks"][:, :-self.edge_queries]
+            outputs["edge_masks"] = outputs["pred_gmasks"][
+                :, -self.edge_queries :
+            ].mean(dim=1, keepdim=True)
+            outputs["pred_gmasks"] = outputs["pred_gmasks"][:, : -self.edge_queries]
         else:
             outputs["edge_masks"] = None
-        
+
         if self.convolute_outputs:
             image = image.repeat_interleave(num_prompts, dim=0)
-            outputs["pred_gmasks"] = self.convolution_procedure(image, outputs["pred_gmasks"])
+            outputs["pred_gmasks"] = self.convolution_procedure(
+                image, outputs["pred_gmasks"]
+            )
         else:
             outputs["pred_gmasks"] = outputs["pred_gmasks"].mean(dim=1, keepdim=True)
 
@@ -342,25 +378,36 @@ class BiomedParseModel(nn.Module):
         # pixel_std = self.pixel_std.clone().detach().view(1, 3, 1, 1).to(image.device)
         image = (image - self.pixel_mean) / self.pixel_std
         image_embedding = self.backbone(image)
-        
-        outputs = self.sem_seg_head.forward_eval(
-            image_features=image_embedding, text=text
-        )
-        
+
         text, num_prompts = process_multi_prompts(text)
         num_prompts = num_prompts.to(image.device)
+
+        raw_text = text
+
+        outputs = self.sem_seg_head.forward_eval(
+            image_features=image_embedding, text=raw_text, num_prompts=num_prompts
+        )
+
         outputs["num_prompts"] = num_prompts
-        
+
+        # text, num_prompts = process_multi_prompts(text)
+        # num_prompts = num_prompts.to(image.device)
+        # outputs["num_prompts"] = num_prompts
+
         if self.edge_queries > 0:
             # use some of the masks for edge detection
-            outputs["edge_masks"] = outputs["pred_gmasks"][:, -self.edge_queries:].mean(dim=1, keepdim=True)
-            outputs["pred_gmasks"] = outputs["pred_gmasks"][:, :-self.edge_queries]
+            outputs["edge_masks"] = outputs["pred_gmasks"][
+                :, -self.edge_queries :
+            ].mean(dim=1, keepdim=True)
+            outputs["pred_gmasks"] = outputs["pred_gmasks"][:, : -self.edge_queries]
         else:
             outputs["edge_masks"] = None
-        
+
         if self.convolute_outputs:
             image = image.repeat_interleave(num_prompts, dim=0)
-            outputs["pred_gmasks"] = self.convolution_procedure(image, outputs["pred_gmasks"])
+            outputs["pred_gmasks"] = self.convolution_procedure(
+                image, outputs["pred_gmasks"]
+            )
         else:
             outputs["pred_gmasks"] = outputs["pred_gmasks"].mean(dim=1, keepdim=True)
 
