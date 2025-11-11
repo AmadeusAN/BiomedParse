@@ -5,14 +5,17 @@ from scipy.optimize import linear_sum_assignment
 
 # Assuming MedSamLoss and DiceLoss classes are imported or defined above
 
+
 def batch_edge_masks(masks: torch.Tensor) -> torch.Tensor:
     # masks: [B,1,H,W]
-    x = masks.float()                         # [B,1,H,W]
-    x = F.pad(x, (1,1,1,1), mode='replicate')    # [B,1,H+2,W+2]
-    dil = F.max_pool2d(x, 3, stride=1)           # [B,1,H,W]
-    ero = -F.max_pool2d(-x, 3, stride=1)         # [B,1,H,W]
+    x = masks.float()  # [B,1,H,W]
+    x = F.pad(x, (1, 1, 1, 1), mode="replicate")  # [B,1,H+2,W+2]
+    dil = F.max_pool2d(x, 3, stride=1)  # [B,1,H,W]
+    ero = -F.max_pool2d(-x, 3, stride=1)  # [B,1,H,W]
     grad = dil - ero
-    return (1*(grad>0)).float()  # [B,1,H,W]
+    return (1 * (grad > 0)).float()  # [B,1,H,W]
+
+
 class HungarianMatcher(nn.Module):
     def __init__(self):
         super(HungarianMatcher, self).__init__()
@@ -133,22 +136,30 @@ class SEEMLoss(nn.Module):
 
         return total_loss
 
+
 import time
+
+
 class BiomedParseLossCLS(nn.Module):
     # SEEM loss with classification for object detection
-    def __init__(self, matcher=None, loss=None, cls_coeff=1.0, pos_weight=3.0, edge_coeff=0.0):
+    def __init__(
+        self, matcher=None, loss=None, cls_coeff=1.0, pos_weight=3.0, edge_coeff=0.0
+    ):
         super(BiomedParseLossCLS, self).__init__()
         self.matcher = matcher if matcher else HungarianMatcher()
         self.loss_fn = loss if loss else torch.nn.CrossEntropyLoss(reduction="none")
-        self.cls_loss_fn = torch.nn.BCEWithLogitsLoss(reduction="none", pos_weight=torch.tensor(pos_weight))
+        self.cls_loss_fn = torch.nn.BCEWithLogitsLoss(
+            reduction="none", pos_weight=torch.tensor(pos_weight)
+        )
         self.cls_coeff = cls_coeff
         self.edge_coeff = edge_coeff
+        self.edge_loss = 0
 
     def forward(self, predictions, labels):
 
         batch_size, num_masks, height, width = labels.shape
         labels = labels.view(batch_size * num_masks, 1, height, width)
-        target_masks = (1*(labels > 0)).float()  # [B*N,1,H,W]
+        target_masks = (1 * (labels > 0)).float()  # [B*N,1,H,W]
         pred_gmasks = predictions["pred_gmasks"]
         if pred_gmasks.shape[-2:] != (height, width):
             pred_gmasks = F.interpolate(
@@ -158,34 +169,45 @@ class BiomedParseLossCLS(nn.Module):
                 align_corners=False,
                 antialias=True,
             )
+
+        # we dont need to provide external existence_target value due to it was computed by groundtruth
         existence_target = (target_masks.flatten(1).sum(dim=1) > 0).float()  # [B*N]
         seg_loss = self.loss_fn(pred_gmasks, target_masks)
         cls_loss = self.cls_loss_fn(
             predictions["object_existence"].view(batch_size * num_masks),
             existence_target,
         )
-        
+
         if self.edge_coeff > 0:
             edge_masks = predictions["edge_masks"]
             if edge_masks.shape[-2:] != (height, width):
-                edge_masks = F.interpolate(edge_masks, size=(height, width), mode="bicubic", align_corners=False, antialias=True)
+                edge_masks = F.interpolate(
+                    edge_masks,
+                    size=(height, width),
+                    mode="bicubic",
+                    align_corners=False,
+                    antialias=True,
+                )
             target_edges = batch_edge_masks(labels)
-            edge_loss = self.loss_fn(edge_masks.float(), target_edges.float())
-            
-        total_loss = self.cls_coeff * cls_loss + seg_loss * existence_target \
-            + self.edge_coeff * edge_loss * existence_target
+            self.edge_loss = self.loss_fn(edge_masks.float(), target_edges.float())
+
+        total_loss = (
+            self.cls_coeff * cls_loss
+            + seg_loss * existence_target
+            + self.edge_coeff * self.edge_loss * existence_target
+        )
         return total_loss.mean()
-        
+
         # for idx in range(batch_size * num_masks):
         #     if target_masks[idx].sum() == 0:
-        #         # classificaiton loss with 0 
+        #         # classificaiton loss with 0
         #         total_loss += self.cls_loss(
-        #             predictions["object_existence"][idx], 
+        #             predictions["object_existence"][idx],
         #             torch.tensor([0.0], device=predictions["object_existence"].device))
         #     else:
         #         total_loss += self.loss(pred_gmasks[idx], target_masks[idx])
         #         total_loss += self.cls_loss(
-        #             predictions["object_existence"][idx], 
+        #             predictions["object_existence"][idx],
         #             torch.tensor([1.0], device=predictions["object_existence"].device))
         # print("SEEMLossCLS time: ", time.time()-t0)
         # return total_loss / num_masks / batch_size

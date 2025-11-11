@@ -80,7 +80,7 @@ class BoltzFormerTextDecoder(nn.Module):
                 dropout=0.0,
                 normalize_before=pre_norm,
             )
-            
+
             self.initial_ffn_layer = FFNLayer(
                 d_model=hidden_dim,
                 dim_feedforward=dim_feedforward,
@@ -140,9 +140,13 @@ class BoltzFormerTextDecoder(nn.Module):
 
         self.num_queries = num_queries
         # learnable query features
-        self.query_feat_ = nn.Embedding(num_queries, hidden_dim)    # changed name different from SEEM weights
+        self.query_feat_ = nn.Embedding(
+            num_queries, hidden_dim
+        )  # changed name different from SEEM weights
         # learnable query p.e.
-        self.query_embed_ = nn.Embedding(num_queries, hidden_dim)    # changed name different from SEEM weights
+        self.query_embed_ = nn.Embedding(
+            num_queries, hidden_dim
+        )  # changed name different from SEEM weights
 
         # query vector for existence classification token
         if output_classifier:
@@ -231,10 +235,8 @@ class BoltzFormerTextDecoder(nn.Module):
             output = self.initial_ffn_layer(output)
 
         # Initial prediction heads
-        outputs_mask, attn_mask = (
-            self.forward_prediction_heads(
-                output, mask_features, attn_mask_target_size=size_list[0]
-            )
+        outputs_mask, attn_mask = self.forward_prediction_heads(
+            output, mask_features, attn_mask_target_size=size_list[0]
         )
 
         predictions_mask.append(outputs_mask)
@@ -264,22 +266,22 @@ class BoltzFormerTextDecoder(nn.Module):
             )
 
             # Separate queries and text tokens again after self-attention
+
+            combined_output = combined_output.as_tensor()
             output = combined_output[: self.num_queries]
             text_output = combined_output[self.num_queries :]
 
             # FFN Layer
             output = self.transformer_ffn_layers[i](output)
 
-            outputs_mask, attn_mask = (
-                self.forward_prediction_heads(
-                    output,
-                    mask_features,
-                    attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels],
-                    layer_id=i,
-                )
+            outputs_mask, attn_mask = self.forward_prediction_heads(
+                output,
+                mask_features,
+                attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels],
+                layer_id=i,
             )
             predictions_mask.append(outputs_mask)
-            
+
             # CLASSIFIER
             # Cross Attention to combined output without gradient
             cls_output, _ = self.classifier_cross_attention_layers[i](
@@ -295,7 +297,7 @@ class BoltzFormerTextDecoder(nn.Module):
 
         out = {
             "pred_gmasks": predictions_mask[-1],
-            "object_existence": self.classifier(cls_output[0])
+            "object_existence": self.classifier(cls_output[0]),
         }
         return out
 
@@ -328,43 +330,43 @@ class BoltzFormerTextDecoder(nn.Module):
         # Boltzman sampling on attention mask
         threshold = self.boltzmann_sampling[
             "mask_threshold"
-        ]    # original threshold for masked attention
+        ]  # original threshold for masked attention
         do_boltzmann = self.boltzmann_sampling[
             "do_boltzmann"
-        ]    # whether to do Boltzman sampling
+        ]  # whether to do Boltzman sampling
         sample_ratio = self.boltzmann_sampling[
             "sample_ratio"
-        ]    # number of iid samples as a ratio of total number of masked tokens
+        ]  # number of iid samples as a ratio of total number of masked tokens
         base_temp = self.boltzmann_sampling[
             "base_temp"
-        ]    # base temperature for Boltzman sampling
+        ]  # base temperature for Boltzman sampling
         ori_ratio = (attn_mask >= threshold).float().mean().item()
         if do_boltzmann:
             # probability of Boltzman sampling
             Temp = base_temp / (
-                2+layer_id
-            )    # temperature decays with layer number (first layer from id -1)
+                2 + layer_id
+            )  # temperature decays with layer number (first layer from id -1)
             boltzmann_prob = torch.exp(attn_mask / Temp)
             boltzmann_prob = (
                 boltzmann_prob * (attn_mask < threshold).float()
-            )    # remove unmasked regions
+            )  # remove unmasked regions
             boltzmann_prob = boltzmann_prob / boltzmann_prob.sum(dim=-1, keepdim=True)
 
             # sample from Boltzman distribution n times
             n_samples = int(
                 attn_mask.shape[-1] * sample_ratio
-            )   # number of iid samples on the tokens
+            )  # number of iid samples on the tokens
             masked_prob = (
-                1-boltzmann_prob
-            )**n_samples    # probability that each token is still masked after n iid samples
+                1 - boltzmann_prob
+            ) ** n_samples  # probability that each token is still masked after n iid samples
             boltzmann_mask = (torch.rand_like(boltzmann_prob) < masked_prob).bool()
 
-            boltz_ratio = 1-(boltzmann_mask).float().mean().item()
+            boltz_ratio = 1 - (boltzmann_mask).float().mean().item()
             # combine with original mask
             attn_mask = torch.logical_and(
                 (attn_mask < threshold).bool(), boltzmann_mask
             )
-            combined_ratio = 1-(attn_mask).float().mean().item()
+            combined_ratio = 1 - (attn_mask).float().mean().item()
 
             print_mask_ratio = False
             if print_mask_ratio:
